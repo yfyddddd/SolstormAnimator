@@ -6,6 +6,11 @@ import type { Frame } from '../types'
 const THUMBNAIL_WIDTH = 144
 const THUMBNAIL_HEIGHT = 81
 
+type TimelineProps = {
+  open: boolean
+  onToggle: () => void
+}
+
 type FrameTileProps = {
   frame: Frame
   index: number
@@ -44,34 +49,49 @@ function FrameTile({ frame, index, isActive, onSelect }: FrameTileProps) {
   )
 }
 
-export function Timeline() {
+export function Timeline({ open, onToggle }: TimelineProps) {
   const frames = useProjectStore((state) => state.frames)
   const currentFrameIndex = useProjectStore((state) => state.currentFrameIndex)
   const selectFrame = useProjectStore((state) => state.selectFrame)
   const addFrame = useProjectStore((state) => state.addFrame)
+  const duplicateCurrentFrame = useProjectStore((state) => state.duplicateCurrentFrame)
+  const deleteCurrentFrame = useProjectStore((state) => state.deleteCurrentFrame)
 
   return (
-    <section className="timeline-panel">
-      <div className="panel-heading">
-        <div>
-          <h2>Timeline</h2>
-          <p>Frame holds live directly on each thumbnail so you can feel the rhythm faster.</p>
+    <div className="timeline-dock">
+      <button className="timeline-handle" onClick={onToggle}>
+        {open ? 'Hide Timeline' : 'Show Timeline'}
+      </button>
+
+      <section className={`timeline-sheet ${open ? 'timeline-sheet-open' : ''}`}>
+        <div className="timeline-sheet-header">
+          <div>
+            <span className="drawer-eyebrow">Bottom Dock</span>
+            <h2>Timeline</h2>
+            <p>Keep the canvas full-screen until you need to check rhythm, holds, or spacing.</p>
+          </div>
+
+          <div className="timeline-sheet-actions">
+            <button onClick={addFrame}>Add Frame</button>
+            <button onClick={duplicateCurrentFrame}>Duplicate</button>
+            <button className="button-danger" onClick={deleteCurrentFrame}>
+              Delete
+            </button>
+          </div>
         </div>
 
-        <button onClick={addFrame}>Add Frame</button>
-      </div>
-
-      <div className="timeline-strip">
-        {frames.map((frame, index) => (
-          <FrameTile
-            key={frame.id}
-            frame={frame}
-            index={index}
-            isActive={index === currentFrameIndex}
-            onSelect={() => selectFrame(index)}
-          />
-        ))}
-      </div>
-    </section>
+        <div className="timeline-strip">
+          {frames.map((frame, index) => (
+            <FrameTile
+              key={frame.id}
+              frame={frame}
+              index={index}
+              isActive={index === currentFrameIndex}
+              onSelect={() => selectFrame(index)}
+            />
+          ))}
+        </div>
+      </section>
+    </div>
   )
 }

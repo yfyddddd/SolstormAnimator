@@ -51,3 +51,10 @@ export type BrushSettings = {
 export type SelectionBounds = Rect & {
   center: Point
 }
+
+export type ViewTransform = {
+  scale: number
+  rotation: number
+  offsetX: number
+  offsetY: number
+}

@@ -6,16 +6,21 @@ import type {
   Rect,
   SelectionBounds,
   Stroke,
-  StrokeMode
+  StrokeMode,
+  ViewTransform
 } from '../types'
 import { createId } from './compat'
 
 export const CANVAS_WIDTH = 960
 export const CANVAS_HEIGHT = 540
 export const CANVAS_BACKGROUND = '#111318'
+export const MIN_VIEW_SCALE = 0.2
+export const MAX_VIEW_SCALE = 10
 
 export const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value))
+
+export const normalizeAngle = (value: number) => Math.atan2(Math.sin(value), Math.cos(value))
 
 export const distanceBetween = (first: Point, second: Point) =>
   Math.hypot(second.x - first.x, second.y - first.y)
@@ -30,6 +35,7 @@ export const appendPoint = (
   }
 
   const lastPoint = points[points.length - 1]
+
   if (distanceBetween(lastPoint, nextPoint) < minimumDistance) {
     return points
   }
@@ -44,18 +50,95 @@ export const normalizeRect = (first: Point, second: Point): Rect => ({
   height: Math.abs(second.y - first.y)
 })
 
-export const getCanvasPoint = (
-  event: React.PointerEvent<HTMLCanvasElement>,
-  width = CANVAS_WIDTH,
-  height = CANVAS_HEIGHT
+export const getRelativePoint = (
+  element: HTMLCanvasElement | HTMLElement,
+  clientX: number,
+  clientY: number
 ): Point => {
-  const rect = event.currentTarget.getBoundingClientRect()
-  const scaleX = width / rect.width
-  const scaleY = height / rect.height
+  const rect = element.getBoundingClientRect()
 
   return {
-    x: (event.clientX - rect.left) * scaleX,
-    y: (event.clientY - rect.top) * scaleY
+    x: clientX - rect.left,
+    y: clientY - rect.top
+  }
+}
+
+export const createFittedViewTransform = (
+  viewportWidth: number,
+  viewportHeight: number
+): ViewTransform => {
+  const inset = Math.min(viewportWidth, viewportHeight) < 720 ? 56 : 132
+  const usableWidth = Math.max(220, viewportWidth - inset * 2)
+  const usableHeight = Math.max(180, viewportHeight - inset * 2)
+
+  return {
+    scale: clamp(
+      Math.min(usableWidth / CANVAS_WIDTH, usableHeight / CANVAS_HEIGHT),
+      MIN_VIEW_SCALE,
+      4
+    ),
+    rotation: 0,
+    offsetX: 0,
+    offsetY: 0
+  }
+}
+
+export const worldToScreenPoint = (
+  point: Point,
+  viewport: ViewTransform,
+  viewportWidth: number,
+  viewportHeight: number
+): Point => {
+  const localX = point.x - CANVAS_WIDTH / 2
+  const localY = point.y - CANVAS_HEIGHT / 2
+  const scaledX = localX * viewport.scale
+  const scaledY = localY * viewport.scale
+  const cos = Math.cos(viewport.rotation)
+  const sin = Math.sin(viewport.rotation)
+
+  return {
+    x: viewportWidth / 2 + viewport.offsetX + scaledX * cos - scaledY * sin,
+    y: viewportHeight / 2 + viewport.offsetY + scaledX * sin + scaledY * cos
+  }
+}
+
+export const screenToWorldPoint = (
+  point: Point,
+  viewport: ViewTransform,
+  viewportWidth: number,
+  viewportHeight: number
+): Point => {
+  const translatedX = point.x - (viewportWidth / 2 + viewport.offsetX)
+  const translatedY = point.y - (viewportHeight / 2 + viewport.offsetY)
+  const cos = Math.cos(viewport.rotation)
+  const sin = Math.sin(viewport.rotation)
+  const localX = (translatedX * cos + translatedY * sin) / viewport.scale
+  const localY = (-translatedX * sin + translatedY * cos) / viewport.scale
+
+  return {
+    x: CANVAS_WIDTH / 2 + localX,
+    y: CANVAS_HEIGHT / 2 + localY
+  }
+}
+
+export const getViewportOffsetForAnchor = (
+  worldPoint: Point,
+  screenPoint: Point,
+  viewportWidth: number,
+  viewportHeight: number,
+  scale: number,
+  rotation: number
+) => {
+  const localX = worldPoint.x - CANVAS_WIDTH / 2
+  const localY = worldPoint.y - CANVAS_HEIGHT / 2
+  const scaledX = localX * scale
+  const scaledY = localY * scale
+  const cos = Math.cos(rotation)
+  const sin = Math.sin(rotation)
+
+  return {
+    offsetX: screenPoint.x - viewportWidth / 2 - (scaledX * cos - scaledY * sin),
+    offsetY: screenPoint.y - viewportHeight / 2 - (scaledX * sin + scaledY * cos)
   }
 }
 
@@ -428,34 +511,43 @@ const drawFrameToContext = (
 
 const drawSelectionOverlay = (
   context: CanvasRenderingContext2D,
-  bounds: SelectionBounds | null
+  bounds: SelectionBounds | null,
+  scale: number
 ) => {
   if (!bounds) {
     return
   }
 
+  const uiScale = 1 / Math.max(scale, 0.0001)
+
   context.save()
-  context.setLineDash([8, 6])
-  context.lineWidth = 2
+  context.setLineDash([10 * uiScale, 7 * uiScale])
+  context.lineWidth = 2 * uiScale
   context.strokeStyle = '#8db3ff'
   context.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height)
   context.fillStyle = '#8db3ff'
   context.beginPath()
-  context.arc(bounds.center.x, bounds.center.y, 4, 0, Math.PI * 2)
+  context.arc(bounds.center.x, bounds.center.y, 4.5 * uiScale, 0, Math.PI * 2)
   context.fill()
   context.restore()
 }
 
-const drawMarqueeRect = (context: CanvasRenderingContext2D, rect: Rect | null) => {
+const drawMarqueeRect = (
+  context: CanvasRenderingContext2D,
+  rect: Rect | null,
+  scale: number
+) => {
   if (!rect) {
     return
   }
 
+  const uiScale = 1 / Math.max(scale, 0.0001)
+
   context.save()
   context.fillStyle = 'rgba(109, 146, 232, 0.14)'
   context.strokeStyle = 'rgba(141, 179, 255, 0.95)'
-  context.lineWidth = 1.5
-  context.setLineDash([6, 4])
+  context.lineWidth = 1.5 * uiScale
+  context.setLineDash([8 * uiScale, 5 * uiScale])
   context.fillRect(rect.x, rect.y, rect.width, rect.height)
   context.strokeRect(rect.x, rect.y, rect.width, rect.height)
   context.restore()
@@ -471,15 +563,49 @@ type PaintEditorSceneOptions = {
   selectionRect?: Rect | null
   showOnionSkin?: boolean
   onionSkinOpacity?: number
+  viewport: ViewTransform
+  viewportWidth: number
+  viewportHeight: number
 }
 
 export const paintEditorScene = (
   context: CanvasRenderingContext2D,
   options: PaintEditorSceneOptions
 ) => {
-  context.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT)
+  const { viewportWidth, viewportHeight, viewport } = options
+
+  context.clearRect(0, 0, viewportWidth, viewportHeight)
+
+  const backdrop = context.createRadialGradient(
+    viewportWidth * 0.5,
+    viewportHeight * 0.32,
+    0,
+    viewportWidth * 0.5,
+    viewportHeight * 0.5,
+    Math.max(viewportWidth, viewportHeight) * 0.75
+  )
+  backdrop.addColorStop(0, '#16202d')
+  backdrop.addColorStop(1, '#0b1118')
+  context.fillStyle = backdrop
+  context.fillRect(0, 0, viewportWidth, viewportHeight)
+
+  context.save()
+  context.translate(viewportWidth / 2 + viewport.offsetX, viewportHeight / 2 + viewport.offsetY)
+  context.rotate(viewport.rotation)
+  context.scale(viewport.scale, viewport.scale)
+  context.translate(-CANVAS_WIDTH / 2, -CANVAS_HEIGHT / 2)
+
+  context.save()
+  context.shadowColor = 'rgba(0, 0, 0, 0.38)'
+  context.shadowBlur = 34 / Math.max(viewport.scale, 0.25)
   context.fillStyle = CANVAS_BACKGROUND
   context.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT)
+  context.restore()
+
+  context.save()
+  context.beginPath()
+  context.rect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT)
+  context.clip()
 
   if (options.showOnionSkin && options.previousFrame) {
     drawFrameToContext(context, options.previousFrame, options.onionSkinOpacity ?? 0.18)
@@ -490,7 +616,17 @@ export const paintEditorScene = (
       previewStroke: options.previewStroke,
       previewLayerId: options.previewLayerId
     })
+  } else if (options.previewStroke) {
+    drawStroke(context, options.previewStroke, 1)
+  }
 
+  context.restore()
+
+  context.strokeStyle = 'rgba(181, 196, 222, 0.56)'
+  context.lineWidth = 1 / Math.max(viewport.scale, 0.0001)
+  context.strokeRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT)
+
+  if (options.currentFrame) {
     const activeLayer = options.activeLayerId
       ? getLayerById(options.currentFrame, options.activeLayerId)
       : null
@@ -498,12 +634,11 @@ export const paintEditorScene = (
     const selectedStrokes =
       activeLayer?.strokes.filter((stroke) => selectedSet.has(stroke.id)) ?? []
 
-    drawSelectionOverlay(context, getSelectionBounds(selectedStrokes))
-  } else if (options.previewStroke) {
-    drawStroke(context, options.previewStroke, 1)
+    drawSelectionOverlay(context, getSelectionBounds(selectedStrokes), viewport.scale)
   }
 
-  drawMarqueeRect(context, options.selectionRect ?? null)
+  drawMarqueeRect(context, options.selectionRect ?? null, viewport.scale)
+  context.restore()
 }
 
 export const drawFrameThumbnail = (

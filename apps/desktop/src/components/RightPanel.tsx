@@ -1,6 +1,13 @@
 import { countFrameStrokes } from '../lib/drawing'
 import { useProjectStore } from '../state/projectStore'
-import type { Tool } from '../types'
+
+export type RightPanelTab = 'layers' | 'transform' | 'animation'
+
+type RightPanelProps = {
+  open: boolean
+  activeTab: RightPanelTab
+  onToggleTab: (tab: RightPanelTab) => void
+}
 
 type SliderFieldProps = {
   label: string
@@ -10,12 +17,6 @@ type SliderFieldProps = {
   displayValue: string
   onChange: (value: number) => void
   step?: number
-}
-
-const toolLabels: Record<Tool, string> = {
-  brush: 'Brush',
-  eraser: 'Eraser',
-  select: 'Select'
 }
 
 function SliderField({
@@ -45,16 +46,13 @@ function SliderField({
   )
 }
 
-export function RightPanel() {
+export function RightPanel({ open, activeTab, onToggleTab }: RightPanelProps) {
   const frames = useProjectStore((state) => state.frames)
   const currentFrameIndex = useProjectStore((state) => state.currentFrameIndex)
   const activeLayerId = useProjectStore((state) => state.activeLayerId)
-  const activeTool = useProjectStore((state) => state.activeTool)
-  const brush = useProjectStore((state) => state.brush)
   const selectedStrokeIds = useProjectStore((state) => state.selectedStrokeIds)
   const onionSkinEnabled = useProjectStore((state) => state.onionSkinEnabled)
   const onionSkinOpacity = useProjectStore((state) => state.onionSkinOpacity)
-  const updateBrush = useProjectStore((state) => state.updateBrush)
   const setCurrentFrameExposure = useProjectStore((state) => state.setCurrentFrameExposure)
   const selectLayer = useProjectStore((state) => state.selectLayer)
   const addLayer = useProjectStore((state) => state.addLayer)
@@ -78,255 +76,274 @@ export function RightPanel() {
   const transformDisabled = !hasSelection || activeLayer?.locked
 
   return (
-    <aside className="inspector-panel">
-      <section className="panel-section">
-        <div className="panel-heading">
+    <div className="panel-anchor panel-anchor-right">
+      <div className="side-dock side-dock-right">
+        <button
+          className={`dock-button ${open && activeTab === 'layers' ? 'dock-button-active' : ''}`}
+          onClick={() => onToggleTab('layers')}
+        >
+          <strong>Layers</strong>
+          <span>{currentFrame.layers.length}</span>
+        </button>
+        <button
+          className={`dock-button ${
+            open && activeTab === 'transform' ? 'dock-button-active' : ''
+          }`}
+          onClick={() => onToggleTab('transform')}
+        >
+          <strong>Transform</strong>
+          <span>{selectedStrokeIds.length}</span>
+        </button>
+        <button
+          className={`dock-button ${
+            open && activeTab === 'animation' ? 'dock-button-active' : ''
+          }`}
+          onClick={() => onToggleTab('animation')}
+        >
+          <strong>Motion</strong>
+          <span>FPS</span>
+        </button>
+      </div>
+
+      <aside
+        className={`floating-drawer floating-drawer-right ${
+          open ? 'floating-drawer-open' : ''
+        }`}
+      >
+        <div className="drawer-header">
           <div>
-            <h2>Tool & Brush</h2>
-            <p>{toolLabels[activeTool]} is active. Brush settings apply to both drawing tools.</p>
+            <span className="drawer-eyebrow">Studio Right</span>
+            <h2>
+              {activeTab === 'layers'
+                ? 'Layers'
+                : activeTab === 'transform'
+                  ? 'Selection'
+                  : 'Animation'}
+            </h2>
+            <p>
+              {activeTab === 'layers'
+                ? 'Keep passes separate and ready for cleanup or color.'
+                : activeTab === 'transform'
+                  ? 'Nudge, rotate, scale, and flip without losing your stroke feel.'
+                  : 'Control timing, holds, and onion skin while the stage stays centered.'}
+            </p>
           </div>
+
+          <button className="mini-button" onClick={() => onToggleTab(activeTab)}>
+            Close
+          </button>
         </div>
 
-        <div className="info-card">
-          <span>Current tool</span>
-          <strong>{toolLabels[activeTool]}</strong>
-        </div>
-
-        <label className="color-field">
-          <span>Color</span>
-          <input
-            type="color"
-            value={brush.color}
-            onChange={(event) => updateBrush({ color: event.target.value })}
-          />
-        </label>
-
-        <SliderField
-          label="Size"
-          min={1}
-          max={64}
-          value={brush.size}
-          displayValue={`${brush.size}px`}
-          onChange={(value) => updateBrush({ size: value })}
-        />
-
-        <SliderField
-          label="Opacity"
-          min={5}
-          max={100}
-          value={Math.round(brush.opacity * 100)}
-          displayValue={`${Math.round(brush.opacity * 100)}%`}
-          onChange={(value) => updateBrush({ opacity: value / 100 })}
-        />
-
-        <SliderField
-          label="Taper"
-          min={0}
-          max={100}
-          value={brush.taper}
-          displayValue={`${brush.taper}%`}
-          onChange={(value) => updateBrush({ taper: value })}
-        />
-
-        <SliderField
-          label="Stabilization"
-          min={0}
-          max={100}
-          value={brush.stabilization}
-          displayValue={`${brush.stabilization}%`}
-          onChange={(value) => updateBrush({ stabilization: value })}
-        />
-      </section>
-
-      <section className="panel-section">
-        <div className="panel-heading">
-          <div>
-            <h2>Selection & Transform</h2>
-            <p>Select strokes with `V`, drag to move them, or use these buttons for transforms.</p>
-          </div>
-        </div>
-
-        <div className="info-card">
-          <span>Selection</span>
-          <strong>{selectedStrokeIds.length} stroke(s)</strong>
-        </div>
-
-        <div className="transform-grid">
-          <button onClick={() => translateSelectedStrokes(0, -8)} disabled={transformDisabled}>
-            Nudge Up
-          </button>
-          <button onClick={() => translateSelectedStrokes(-8, 0)} disabled={transformDisabled}>
-            Nudge Left
-          </button>
-          <button onClick={() => translateSelectedStrokes(8, 0)} disabled={transformDisabled}>
-            Nudge Right
-          </button>
-          <button onClick={() => translateSelectedStrokes(0, 8)} disabled={transformDisabled}>
-            Nudge Down
-          </button>
-          <button onClick={() => rotateSelectedStrokes(-15)} disabled={transformDisabled}>
-            Rotate -15°
-          </button>
-          <button onClick={() => rotateSelectedStrokes(15)} disabled={transformDisabled}>
-            Rotate +15°
-          </button>
-          <button onClick={() => scaleSelectedStrokes(0.92, 0.92)} disabled={transformDisabled}>
-            Scale Down
-          </button>
-          <button onClick={() => scaleSelectedStrokes(1.08, 1.08)} disabled={transformDisabled}>
-            Scale Up
-          </button>
-          <button onClick={() => flipSelectedStrokes('horizontal')} disabled={transformDisabled}>
-            Flip Horizontal
-          </button>
-          <button onClick={() => flipSelectedStrokes('vertical')} disabled={transformDisabled}>
-            Flip Vertical
+        <div className="drawer-tabs">
+          <button
+            className={`drawer-tab ${activeTab === 'layers' ? 'drawer-tab-active' : ''}`}
+            onClick={() => onToggleTab('layers')}
+          >
+            Layers
           </button>
           <button
-            className="button-danger"
-            onClick={deleteSelectedStrokes}
-            disabled={transformDisabled}
+            className={`drawer-tab ${activeTab === 'transform' ? 'drawer-tab-active' : ''}`}
+            onClick={() => onToggleTab('transform')}
           >
-            Delete Selection
+            Transform
           </button>
-        </div>
-      </section>
-
-      <section className="panel-section">
-        <div className="panel-heading">
-          <div>
-            <h2>Layers</h2>
-            <p>Layers stay aligned across frames, so you can animate cleanly on separate passes.</p>
-          </div>
-        </div>
-
-        <div className="layer-actions">
-          <button onClick={addLayer}>Add Layer</button>
-          <button onClick={duplicateActiveLayer}>Duplicate</button>
-          <button className="button-danger" onClick={deleteActiveLayer}>
-            Delete
+          <button
+            className={`drawer-tab ${activeTab === 'animation' ? 'drawer-tab-active' : ''}`}
+            onClick={() => onToggleTab('animation')}
+          >
+            Animation
           </button>
         </div>
 
-        <div className="layer-list">
-          {[...currentFrame.layers].reverse().map((layer) => (
-            <div
-              key={layer.id}
-              className={`layer-row ${layer.id === activeLayerId ? 'layer-row-active' : ''}`}
-            >
-              <button className="layer-main" onClick={() => selectLayer(layer.id)}>
-                <strong>{layer.name}</strong>
-                <span>{layer.strokes.length} strokes</span>
-              </button>
-              <button
-                className="mini-button"
-                onClick={() => toggleLayerVisibility(layer.id)}
-                title={layer.visible ? 'Hide layer' : 'Show layer'}
-              >
-                {layer.visible ? 'Hide' : 'Show'}
-              </button>
-              <button
-                className="mini-button"
-                onClick={() => toggleLayerLock(layer.id)}
-                title={layer.locked ? 'Unlock layer' : 'Lock layer'}
-              >
-                {layer.locked ? 'Unlock' : 'Lock'}
-              </button>
-            </div>
-          ))}
+        <div className="drawer-body">
+          {activeTab === 'layers' ? (
+            <>
+              <section className="panel-card">
+                <div className="layer-actions">
+                  <button onClick={addLayer}>Add Layer</button>
+                  <button onClick={duplicateActiveLayer}>Duplicate</button>
+                  <button className="button-danger" onClick={deleteActiveLayer}>
+                    Delete
+                  </button>
+                </div>
+
+                <div className="layer-list">
+                  {[...currentFrame.layers].reverse().map((layer) => (
+                    <div
+                      key={layer.id}
+                      className={`layer-row ${
+                        layer.id === activeLayerId ? 'layer-row-active' : ''
+                      }`}
+                    >
+                      <button className="layer-main" onClick={() => selectLayer(layer.id)}>
+                        <strong>{layer.name}</strong>
+                        <span>{layer.strokes.length} strokes</span>
+                      </button>
+                      <button
+                        className="mini-button"
+                        onClick={() => toggleLayerVisibility(layer.id)}
+                        title={layer.visible ? 'Hide layer' : 'Show layer'}
+                      >
+                        {layer.visible ? 'Hide' : 'Show'}
+                      </button>
+                      <button
+                        className="mini-button"
+                        onClick={() => toggleLayerLock(layer.id)}
+                        title={layer.locked ? 'Unlock layer' : 'Lock layer'}
+                      >
+                        {layer.locked ? 'Unlock' : 'Lock'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              {activeLayer && (
+                <section className="panel-card">
+                  <div className="info-card">
+                    <span>Active layer</span>
+                    <strong>{activeLayer.name}</strong>
+                  </div>
+
+                  <SliderField
+                    label="Layer opacity"
+                    min={5}
+                    max={100}
+                    value={Math.round(activeLayer.opacity * 100)}
+                    displayValue={`${Math.round(activeLayer.opacity * 100)}%`}
+                    onChange={(value) => setLayerOpacity(activeLayer.id, value / 100)}
+                  />
+                </section>
+              )}
+            </>
+          ) : null}
+
+          {activeTab === 'transform' ? (
+            <>
+              <section className="panel-card">
+                <div className="info-card">
+                  <span>Selection</span>
+                  <strong>{selectedStrokeIds.length} stroke(s)</strong>
+                </div>
+
+                <div className="transform-grid">
+                  <button onClick={() => translateSelectedStrokes(0, -8)} disabled={transformDisabled}>
+                    Nudge Up
+                  </button>
+                  <button onClick={() => translateSelectedStrokes(-8, 0)} disabled={transformDisabled}>
+                    Nudge Left
+                  </button>
+                  <button onClick={() => translateSelectedStrokes(8, 0)} disabled={transformDisabled}>
+                    Nudge Right
+                  </button>
+                  <button onClick={() => translateSelectedStrokes(0, 8)} disabled={transformDisabled}>
+                    Nudge Down
+                  </button>
+                  <button onClick={() => rotateSelectedStrokes(-15)} disabled={transformDisabled}>
+                    Rotate -15 deg
+                  </button>
+                  <button onClick={() => rotateSelectedStrokes(15)} disabled={transformDisabled}>
+                    Rotate +15 deg
+                  </button>
+                  <button
+                    onClick={() => scaleSelectedStrokes(0.92, 0.92)}
+                    disabled={transformDisabled}
+                  >
+                    Scale Down
+                  </button>
+                  <button
+                    onClick={() => scaleSelectedStrokes(1.08, 1.08)}
+                    disabled={transformDisabled}
+                  >
+                    Scale Up
+                  </button>
+                  <button
+                    onClick={() => flipSelectedStrokes('horizontal')}
+                    disabled={transformDisabled}
+                  >
+                    Flip Horizontal
+                  </button>
+                  <button
+                    onClick={() => flipSelectedStrokes('vertical')}
+                    disabled={transformDisabled}
+                  >
+                    Flip Vertical
+                  </button>
+                  <button
+                    className="button-danger transform-delete"
+                    onClick={deleteSelectedStrokes}
+                    disabled={transformDisabled}
+                  >
+                    Delete Selection
+                  </button>
+                </div>
+              </section>
+
+              <section className="panel-card">
+                <p className="drawer-note">
+                  Drag inside the blue selection box to move strokes on-canvas, then use these
+                  buttons for clean nudges and fast flips.
+                </p>
+              </section>
+            </>
+          ) : null}
+
+          {activeTab === 'animation' ? (
+            <>
+              <section className="panel-card">
+                <div className="info-card">
+                  <span>Current frame</span>
+                  <strong>
+                    {currentFrameIndex + 1} / {frames.length}
+                  </strong>
+                </div>
+                <div className="info-card">
+                  <span>Frame content</span>
+                  <strong>{countFrameStrokes(currentFrame)} strokes</strong>
+                </div>
+
+                <SliderField
+                  label="Frame hold"
+                  min={1}
+                  max={12}
+                  value={currentFrame.exposure}
+                  displayValue={`x${currentFrame.exposure}`}
+                  onChange={setCurrentFrameExposure}
+                />
+
+                <label className="toggle-field">
+                  <span>Previous-frame onion skin</span>
+                  <input
+                    type="checkbox"
+                    checked={onionSkinEnabled}
+                    onChange={(event) => setOnionSkinEnabled(event.target.checked)}
+                  />
+                </label>
+
+                <SliderField
+                  label="Onion skin opacity"
+                  min={5}
+                  max={45}
+                  value={Math.round(onionSkinOpacity * 100)}
+                  displayValue={`${Math.round(onionSkinOpacity * 100)}%`}
+                  onChange={(value) => setOnionSkinOpacity(value / 100)}
+                />
+              </section>
+
+              <section className="panel-card">
+                <div className="shortcut-row">
+                  <span>Frame hold</span>
+                  <strong>x{currentFrame.exposure}</strong>
+                </div>
+                <div className="shortcut-row">
+                  <span>Onion skin</span>
+                  <strong>{onionSkinEnabled ? 'On' : 'Off'}</strong>
+                </div>
+              </section>
+            </>
+          ) : null}
         </div>
-
-        {activeLayer && (
-          <SliderField
-            label={`${activeLayer.name} opacity`}
-            min={5}
-            max={100}
-            value={Math.round(activeLayer.opacity * 100)}
-            displayValue={`${Math.round(activeLayer.opacity * 100)}%`}
-            onChange={(value) => setLayerOpacity(activeLayer.id, value / 100)}
-          />
-        )}
-      </section>
-
-      <section className="panel-section">
-        <div className="panel-heading">
-          <div>
-            <h2>Animation</h2>
-            <p>Frame hold controls how long the current frame stays on screen during playback.</p>
-          </div>
-        </div>
-
-        <div className="info-card">
-          <span>Current frame</span>
-          <strong>
-            {currentFrameIndex + 1} / {frames.length}
-          </strong>
-        </div>
-
-        <div className="info-card">
-          <span>Frame content</span>
-          <strong>{countFrameStrokes(currentFrame)} strokes</strong>
-        </div>
-
-        <SliderField
-          label="Frame hold"
-          min={1}
-          max={12}
-          value={currentFrame.exposure}
-          displayValue={`x${currentFrame.exposure}`}
-          onChange={setCurrentFrameExposure}
-        />
-
-        <label className="toggle-field">
-          <span>Previous-frame onion skin</span>
-          <input
-            type="checkbox"
-            checked={onionSkinEnabled}
-            onChange={(event) => setOnionSkinEnabled(event.target.checked)}
-          />
-        </label>
-
-        <SliderField
-          label="Onion skin opacity"
-          min={5}
-          max={45}
-          value={Math.round(onionSkinOpacity * 100)}
-          displayValue={`${Math.round(onionSkinOpacity * 100)}%`}
-          onChange={(value) => setOnionSkinOpacity(value / 100)}
-        />
-      </section>
-
-      <section className="panel-section">
-        <div className="panel-heading">
-          <div>
-            <h2>Shortcuts</h2>
-            <p>These are wired into the editor now.</p>
-          </div>
-        </div>
-
-        <div className="shortcut-list">
-          <div className="shortcut-row">
-            <span>Undo / Redo</span>
-            <strong>Ctrl/Cmd+Z, Ctrl/Cmd+Y</strong>
-          </div>
-          <div className="shortcut-row">
-            <span>Brush / Eraser / Select</span>
-            <strong>B, E, V</strong>
-          </div>
-          <div className="shortcut-row">
-            <span>Play / Pause</span>
-            <strong>Space</strong>
-          </div>
-          <div className="shortcut-row">
-            <span>Delete selection</span>
-            <strong>Delete</strong>
-          </div>
-          <div className="shortcut-row">
-            <span>Nudge selection</span>
-            <strong>Arrow keys</strong>
-          </div>
-        </div>
-      </section>
-    </aside>
+      </aside>
+    </div>
   )
 }
