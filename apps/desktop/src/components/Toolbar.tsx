@@ -2,6 +2,7 @@ import { countFrameStrokes } from '../lib/drawing'
 import { useProjectStore } from '../state/projectStore'
 
 type ToolbarProps = {
+  collapsed: boolean
   isFullscreen: boolean
   isLeftPanelOpen: boolean
   isRightPanelOpen: boolean
@@ -11,9 +12,11 @@ type ToolbarProps = {
   onToggleLeftPanel: () => void
   onToggleRightPanel: () => void
   onToggleTimeline: () => void
+  onToggleCollapsed: () => void
 }
 
 export function Toolbar({
+  collapsed,
   isFullscreen,
   isLeftPanelOpen,
   isRightPanelOpen,
@@ -22,7 +25,8 @@ export function Toolbar({
   onResetView,
   onToggleLeftPanel,
   onToggleRightPanel,
-  onToggleTimeline
+  onToggleTimeline,
+  onToggleCollapsed
 }: ToolbarProps) {
   const frames = useProjectStore((state) => state.frames)
   const currentFrameIndex = useProjectStore((state) => state.currentFrameIndex)
@@ -44,11 +48,40 @@ export function Toolbar({
   const activeLayer =
     currentFrame.layers.find((layer) => layer.id === activeLayerId) ?? currentFrame.layers[0]
 
+  if (collapsed) {
+    return (
+      <section className="top-toolbar top-toolbar-collapsed">
+        <div className="toolbar-brand">
+          <span className="toolbar-badge">Solstorm Animator</span>
+        </div>
+
+        <div className="toolbar-group">
+          <button className={isLeftPanelOpen ? 'button-accent' : ''} onClick={onToggleLeftPanel}>
+            Brush
+          </button>
+          <button className={isRightPanelOpen ? 'button-accent' : ''} onClick={onToggleRightPanel}>
+            Layers
+          </button>
+          <button className={isTimelineOpen ? 'button-accent' : ''} onClick={onToggleTimeline}>
+            Timeline
+          </button>
+        </div>
+
+        <div className="toolbar-group toolbar-group-end">
+          <button className="button-accent" onClick={togglePlayback}>
+            {isPlaying ? 'Pause' : 'Play'}
+          </button>
+          <button onClick={onToggleCollapsed}>Expand</button>
+        </div>
+      </section>
+    )
+  }
+
   return (
     <section className="top-toolbar">
       <div className="toolbar-brand">
-        <span className="toolbar-badge">Soulstorm Animator</span>
-        <p>Canvas first. Controls on tap.</p>
+        <span className="toolbar-badge">Solstorm Animator</span>
+        <p>Draw on the stage, pull controls in only when you need them.</p>
       </div>
 
       <div className="toolbar-group">
@@ -79,8 +112,8 @@ export function Toolbar({
         <button onClick={() => stepFrame(1)} disabled={currentFrameIndex === frames.length - 1}>
           Next
         </button>
-        <button onClick={addFrame}>New Frame</button>
-        <button onClick={duplicateCurrentFrame}>Duplicate</button>
+        <button onClick={addFrame}>New</button>
+        <button onClick={duplicateCurrentFrame}>Dupe</button>
       </div>
 
       <label className="toolbar-slider">
@@ -100,8 +133,9 @@ export function Toolbar({
       <div className="toolbar-group toolbar-group-end">
         <button onClick={onResetView}>Reset View</button>
         <button onClick={onToggleFullscreen}>
-          {isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+          {isFullscreen ? 'Windowed' : 'Fullscreen'}
         </button>
+        <button onClick={onToggleCollapsed}>Minimize</button>
       </div>
 
       <div className="toolbar-status">

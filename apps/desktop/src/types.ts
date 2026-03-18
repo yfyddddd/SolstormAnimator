@@ -1,6 +1,9 @@
 export type Point = {
   x: number
   y: number
+  pressure?: number
+  tiltX?: number
+  tiltY?: number
 }
 
 export type Rect = {
@@ -12,6 +15,26 @@ export type Rect = {
 
 export type Tool = 'brush' | 'eraser' | 'select'
 
+export type DrawingTool = Exclude<Tool, 'select'>
+
+export type BrushTip =
+  | 'round'
+  | 'fine'
+  | 'paint'
+  | 'grain'
+  | 'stamp-star'
+  | 'stamp-square'
+
+export type BrushPresetId =
+  | 'round-brush'
+  | 'fine-liner'
+  | 'paintbrush'
+  | 'grain-shader'
+  | 'star-stamp'
+  | 'square-stamp'
+  | 'soft-eraser'
+  | 'block-eraser'
+
 export type StrokeMode = 'draw' | 'erase'
 
 export type Stroke = {
@@ -22,6 +45,11 @@ export type Stroke = {
   opacity: number
   taper: number
   stabilization: number
+  tip: BrushTip
+  grain: number
+  spacing: number
+  pressureSize: number
+  pressureOpacity: number
   mode: StrokeMode
 }
 
@@ -41,11 +69,17 @@ export type Frame = {
 }
 
 export type BrushSettings = {
+  presetId: BrushPresetId
   color: string
   size: number
   opacity: number
   taper: number
   stabilization: number
+  tip: BrushTip
+  grain: number
+  spacing: number
+  pressureSize: number
+  pressureOpacity: number
 }
 
 export type SelectionBounds = Rect & {

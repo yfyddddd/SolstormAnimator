@@ -1,7 +1,17 @@
 import { create } from 'zustand'
+import { applyPresetToSettings, createInitialToolPresets } from '../lib/brushes'
 import { cloneFrame, cloneFrames, cloneLayer, cloneStroke, createId } from '../lib/compat'
 import { clamp, getLayerById, getSelectionBounds } from '../lib/drawing'
-import type { BrushSettings, Frame, Layer, Point, Stroke, Tool } from '../types'
+import type {
+  BrushPresetId,
+  BrushSettings,
+  DrawingTool,
+  Frame,
+  Layer,
+  Point,
+  Stroke,
+  Tool
+} from '../types'
 
 type DocumentSnapshot = {
   frames: Frame[]
@@ -17,7 +27,8 @@ type ProjectState = {
   activeLayerId: string
   selectedStrokeIds: string[]
   activeTool: Tool
-  brush: BrushSettings
+  lastDrawingTool: DrawingTool
+  toolPresets: Record<DrawingTool, BrushSettings>
   isPlaying: boolean
   fps: number
   playbackTick: number
@@ -26,6 +37,7 @@ type ProjectState = {
   history: DocumentSnapshot[]
   future: DocumentSnapshot[]
   updateBrush: (partial: Partial<BrushSettings>) => void
+  applyBrushPreset: (presetId: BrushPresetId) => void
   setActiveTool: (tool: Tool) => void
   setFps: (fps: number) => void
   setOnionSkinEnabled: (enabled: boolean) => void
@@ -125,6 +137,9 @@ const getSafeActiveLayerId = (frame: Frame, candidateLayerId: string) =>
     ? candidateLayerId
     : frame.layers[0]?.id ?? candidateLayerId
 
+const getEditableDrawingTool = (state: Pick<ProjectState, 'activeTool' | 'lastDrawingTool'>) =>
+  state.activeTool === 'select' ? state.lastDrawingTool : state.activeTool
+
 const createSnapshot = (state: ProjectState): DocumentSnapshot => ({
   frames: cloneFrames(state.frames),
   currentFrameIndex: state.currentFrameIndex,
@@ -138,14 +153,7 @@ const appendHistory = (history: DocumentSnapshot[], snapshot: DocumentSnapshot) 
 
 const initialLayer = createLayerTemplate('Layer 1')
 const initialFrame = createFrameFromTemplates([initialLayer])
-
-const initialBrush: BrushSettings = {
-  color: '#ffffff',
-  size: 6,
-  opacity: 1,
-  taper: 22,
-  stabilization: 34
-}
+const initialToolPresets = createInitialToolPresets()
 
 export const useProjectStore = create<ProjectState>((set, get) => {
   const applyMutation = (
@@ -232,7 +240,8 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     activeLayerId: initialLayer.id,
     selectedStrokeIds: [],
     activeTool: 'brush',
-    brush: initialBrush,
+    lastDrawingTool: 'brush',
+    toolPresets: initialToolPresets,
     isPlaying: false,
     fps: 8,
     playbackTick: 0,
@@ -241,16 +250,35 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     history: [],
     future: [],
     updateBrush: (partial) =>
-      set((state) => ({
-        brush: {
-          ...state.brush,
-          ...partial
+      set((state) => {
+        const editableTool = getEditableDrawingTool(state)
+
+        return {
+          toolPresets: {
+            ...state.toolPresets,
+            [editableTool]: {
+              ...state.toolPresets[editableTool],
+              ...partial
+            }
+          }
         }
-      })),
-    setActiveTool: (tool) =>
-      set({
-        activeTool: tool
       }),
+    applyBrushPreset: (presetId) =>
+      set((state) => {
+        const editableTool = getEditableDrawingTool(state)
+
+        return {
+          toolPresets: {
+            ...state.toolPresets,
+            [editableTool]: applyPresetToSettings(state.toolPresets[editableTool], presetId)
+          }
+        }
+      }),
+    setActiveTool: (tool) =>
+      set((state) => ({
+        activeTool: tool,
+        lastDrawingTool: tool === 'select' ? state.lastDrawingTool : tool
+      })),
     setFps: (fps) =>
       set({
         fps: clamp(Math.round(fps), 1, 24)
@@ -685,6 +713,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         (stroke) => ({
           ...stroke,
           points: stroke.points.map((point) => ({
+            ...point,
             x: point.x + dx,
             y: point.y + dy
           }))
@@ -702,6 +731,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
             const offsetY = point.y - center.y
 
             return {
+              ...point,
               x: center.x + offsetX * Math.cos(radians) - offsetY * Math.sin(radians),
               y: center.y + offsetX * Math.sin(radians) + offsetY * Math.cos(radians)
             }
@@ -719,6 +749,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
             ...stroke,
             size: Math.max(1, stroke.size * sizeScale),
             points: stroke.points.map((point) => ({
+              ...point,
               x: center.x + (point.x - center.x) * scaleX,
               y: center.y + (point.y - center.y) * scaleY
             }))
@@ -730,6 +761,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       transformSelectedStrokes((stroke, center) => ({
         ...stroke,
         points: stroke.points.map((point) => ({
+          ...point,
           x: axis === 'horizontal' ? center.x - (point.x - center.x) : point.x,
           y: axis === 'vertical' ? center.y - (point.y - center.y) : point.y
         }))

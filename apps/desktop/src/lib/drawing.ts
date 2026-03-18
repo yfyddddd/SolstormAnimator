@@ -13,9 +13,16 @@ import { createId } from './compat'
 
 export const CANVAS_WIDTH = 960
 export const CANVAS_HEIGHT = 540
-export const CANVAS_BACKGROUND = '#111318'
+export const CANVAS_BACKGROUND = '#0f141d'
 export const MIN_VIEW_SCALE = 0.2
 export const MAX_VIEW_SCALE = 10
+
+type BrushSample = {
+  point: Point
+  angle: number
+  progress: number
+  index: number
+}
 
 export const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value))
@@ -24,6 +31,33 @@ export const normalizeAngle = (value: number) => Math.atan2(Math.sin(value), Mat
 
 export const distanceBetween = (first: Point, second: Point) =>
   Math.hypot(second.x - first.x, second.y - first.y)
+
+const interpolateNumber = (first: number | undefined, second: number | undefined, t: number) =>
+  (first ?? second ?? 0) + ((second ?? first ?? 0) - (first ?? second ?? 0)) * t
+
+const interpolatePoint = (first: Point, second: Point, t: number): Point => ({
+  x: first.x + (second.x - first.x) * t,
+  y: first.y + (second.y - first.y) * t,
+  pressure: interpolateNumber(first.pressure, second.pressure, t),
+  tiltX: interpolateNumber(first.tiltX, second.tiltX, t),
+  tiltY: interpolateNumber(first.tiltY, second.tiltY, t)
+})
+
+const hashString = (value: string) => {
+  let hash = 2166136261
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+
+  return hash >>> 0
+}
+
+const pseudoRandom = (seed: number) => {
+  const value = Math.sin(seed * 12.9898) * 43758.5453123
+  return value - Math.floor(value)
+}
 
 export const appendPoint = (
   points: Point[],
@@ -67,7 +101,7 @@ export const createFittedViewTransform = (
   viewportWidth: number,
   viewportHeight: number
 ): ViewTransform => {
-  const inset = Math.min(viewportWidth, viewportHeight) < 720 ? 56 : 132
+  const inset = Math.min(viewportWidth, viewportHeight) < 720 ? 56 : 138
   const usableWidth = Math.max(220, viewportWidth - inset * 2)
   const usableHeight = Math.max(180, viewportHeight - inset * 2)
 
@@ -166,6 +200,7 @@ export const stabilizePoints = (points: Point[], stabilization: number) => {
       const averageY = (previous.y + current.y + following.y) / 3
 
       next.push({
+        ...current,
         x: current.x + (averageX - current.x) * weight,
         y: current.y + (averageY - current.y) * weight
       })
@@ -198,6 +233,11 @@ export const createStrokeFromRawPoints = (
     opacity: brush.opacity,
     taper: brush.taper,
     stabilization: brush.stabilization,
+    tip: brush.tip,
+    grain: brush.grain,
+    spacing: brush.spacing,
+    pressureSize: brush.pressureSize,
+    pressureOpacity: brush.pressureOpacity,
     mode
   } satisfies Stroke
 }
@@ -214,30 +254,134 @@ const getTaperFactor = (progress: number, taper: number) => {
   const endFactor = Math.min(1, (1 - progress) / edgeSpan)
   const bodyFactor = Math.min(1, startFactor, endFactor)
 
-  return 0.22 + bodyFactor * 0.78
+  return 0.2 + bodyFactor * 0.8
 }
 
-const getStrokeWidths = (stroke: Stroke) => {
-  if (stroke.points.length === 1) {
-    return [stroke.size]
+const getStrokeBoundsPadding = (stroke: Stroke) => {
+  if (stroke.tip === 'paint') {
+    return stroke.size * 0.85
   }
 
-  const cumulativeLengths = [0]
+  if (stroke.tip === 'grain') {
+    return stroke.size * 0.95
+  }
+
+  if (stroke.tip === 'stamp-star' || stroke.tip === 'stamp-square') {
+    return stroke.size * 0.75
+  }
+
+  return stroke.size / 2
+}
+
+const getPointPressure = (point: Point) => clamp(point.pressure ?? 1, 0.05, 1)
+
+const getPressureFactor = (pressure: number, influence: number) => {
+  const amount = clamp(influence, 0, 100) / 100
+  return 1 - amount + pressure * amount
+}
+
+const getStrokeSpacing = (stroke: Stroke) => {
+  const spacingAmount = clamp(stroke.spacing, 0, 100) / 100
+  const baseFactor =
+    stroke.tip === 'stamp-star' || stroke.tip === 'stamp-square'
+      ? 0.42
+      : stroke.tip === 'grain'
+        ? 0.26
+        : stroke.tip === 'paint'
+          ? 0.18
+          : 0.12
+
+  return Math.max(0.7, stroke.size * (baseFactor + spacingAmount * 0.52))
+}
+
+const sampleStroke = (stroke: Stroke): BrushSample[] => {
+  if (stroke.points.length === 0) {
+    return []
+  }
+
+  if (stroke.points.length === 1) {
+    return [
+      {
+        point: stroke.points[0],
+        angle: 0,
+        progress: 0,
+        index: 0
+      }
+    ]
+  }
+
+  const segmentLengths: number[] = []
   let totalLength = 0
 
   for (let index = 1; index < stroke.points.length; index += 1) {
-    totalLength += distanceBetween(stroke.points[index - 1], stroke.points[index])
-    cumulativeLengths.push(totalLength)
+    const segmentLength = distanceBetween(stroke.points[index - 1], stroke.points[index])
+    segmentLengths.push(segmentLength)
+    totalLength += segmentLength
   }
 
   if (totalLength === 0) {
-    return stroke.points.map(() => stroke.size)
+    return [
+      {
+        point: stroke.points[0],
+        angle: 0,
+        progress: 0,
+        index: 0
+      }
+    ]
   }
 
-  return cumulativeLengths.map((length) => {
-    const progress = length / totalLength
-    return Math.max(0.35, stroke.size * getTaperFactor(progress, stroke.taper))
-  })
+  const spacing = getStrokeSpacing(stroke)
+  const samples: BrushSample[] = []
+  let targetDistance = 0
+  let segmentIndex = 0
+  let segmentStartDistance = 0
+
+  while (targetDistance <= totalLength) {
+    while (
+      segmentIndex < segmentLengths.length - 1 &&
+      segmentStartDistance + segmentLengths[segmentIndex] < targetDistance
+    ) {
+      segmentStartDistance += segmentLengths[segmentIndex]
+      segmentIndex += 1
+    }
+
+    const firstPoint = stroke.points[segmentIndex]
+    const secondPoint = stroke.points[segmentIndex + 1] ?? stroke.points[segmentIndex]
+    const segmentLength = Math.max(segmentLengths[segmentIndex] ?? 0, 0.0001)
+    const distanceIntoSegment = clamp(
+      targetDistance - segmentStartDistance,
+      0,
+      segmentLength
+    )
+    const t = distanceIntoSegment / segmentLength
+    const point = interpolatePoint(firstPoint, secondPoint, t)
+
+    samples.push({
+      point,
+      angle: Math.atan2(secondPoint.y - firstPoint.y, secondPoint.x - firstPoint.x),
+      progress: clamp(targetDistance / totalLength, 0, 1),
+      index: samples.length
+    })
+
+    targetDistance += spacing
+  }
+
+  const lastPoint = stroke.points[stroke.points.length - 1]
+  const lastAngle = Math.atan2(
+    lastPoint.y - stroke.points[stroke.points.length - 2].y,
+    lastPoint.x - stroke.points[stroke.points.length - 2].x
+  )
+
+  if (samples.length === 0 || samples[samples.length - 1].progress < 1) {
+    samples.push({
+      point: lastPoint,
+      angle: lastAngle,
+      progress: 1,
+      index: samples.length
+    })
+  }
+
+  return samples
 }
 
 const distancePointToSegment = (point: Point, start: Point, end: Point) => {
@@ -268,7 +412,7 @@ export const getStrokeBounds = (stroke: Stroke): Rect | null => {
     return null
   }
 
-  const padding = Math.max(2, stroke.size / 2)
+  const padding = Math.max(2, getStrokeBoundsPadding(stroke))
   let minX = stroke.points[0].x - padding
   let minY = stroke.points[0].y - padding
   let maxX = stroke.points[0].x + padding
@@ -309,7 +453,7 @@ export const pointHitsStroke = (point: Point, stroke: Stroke, padding = 6) => {
     return distanceBetween(point, stroke.points[0]) <= stroke.size / 2 + padding
   }
 
-  const radius = Math.max(3, stroke.size / 2) + padding
+  const radius = Math.max(3, getStrokeBoundsPadding(stroke)) + padding
 
   for (let index = 1; index < stroke.points.length; index += 1) {
     if (
@@ -400,6 +544,219 @@ const getScratchContext = () => {
   }
 }
 
+const getSampleSize = (stroke: Stroke, sample: BrushSample) => {
+  const pressure = getPointPressure(sample.point)
+  return Math.max(
+    0.35,
+    stroke.size *
+      getTaperFactor(sample.progress, stroke.taper) *
+      getPressureFactor(pressure, stroke.pressureSize)
+  )
+}
+
+const getSampleAlpha = (stroke: Stroke, sample: BrushSample, alpha: number) =>
+  clamp(alpha, 0, 1) *
+  clamp(stroke.opacity, 0, 1) *
+  getPressureFactor(getPointPressure(sample.point), stroke.pressureOpacity)
+
+const getTiltData = (point: Point, fallbackAngle: number) => {
+  const tiltX = point.tiltX ?? 0
+  const tiltY = point.tiltY ?? 0
+  const magnitude = clamp(Math.hypot(tiltX, tiltY) / 90, 0, 1)
+
+  return {
+    magnitude,
+    angle: tiltX === 0 && tiltY === 0 ? fallbackAngle : Math.atan2(tiltY, tiltX)
+  }
+}
+
+const drawTextureSpeckles = (
+  context: CanvasRenderingContext2D,
+  stroke: Stroke,
+  sample: BrushSample,
+  size: number,
+  alpha: number,
+  seedBase: number
+) => {
+  const intensity = clamp(stroke.grain, 0, 100) / 100
+
+  if (intensity === 0) {
+    return
+  }
+
+  const speckleCount = Math.max(2, Math.round(3 + intensity * 9 + size / 7))
+
+  for (let index = 0; index < speckleCount; index += 1) {
+    const radiusSeed = seedBase + sample.index * 131 + index * 17
+    const angleSeed = seedBase + sample.index * 97 + index * 53
+    const distanceSeed = seedBase + sample.index * 173 + index * 29
+    const speckleRadius = (0.06 + pseudoRandom(radiusSeed) * 0.14) * size
+    const speckleAngle = pseudoRandom(angleSeed) * Math.PI * 2
+    const speckleDistance = pseudoRandom(distanceSeed) * size * (0.3 + intensity * 0.55)
+
+    context.globalAlpha = alpha * (0.16 + intensity * 0.28)
+    context.beginPath()
+    context.arc(
+      sample.point.x + Math.cos(speckleAngle) * speckleDistance,
+      sample.point.y + Math.sin(speckleAngle) * speckleDistance,
+      speckleRadius,
+      0,
+      Math.PI * 2
+    )
+    context.fill()
+  }
+}
+
+const drawRoundStamp = (
+  context: CanvasRenderingContext2D,
+  stroke: Stroke,
+  sample: BrushSample,
+  size: number,
+  alpha: number,
+  seedBase: number
+) => {
+  context.globalAlpha = alpha
+  context.beginPath()
+  context.arc(sample.point.x, sample.point.y, size / 2, 0, Math.PI * 2)
+  context.fill()
+  drawTextureSpeckles(context, stroke, sample, size, alpha, seedBase)
+}
+
+const drawFineStamp = (
+  context: CanvasRenderingContext2D,
+  sample: BrushSample,
+  size: number,
+  alpha: number
+) => {
+  context.save()
+  context.translate(sample.point.x, sample.point.y)
+  context.rotate(sample.angle)
+  context.globalAlpha = alpha
+  context.beginPath()
+  context.ellipse(0, 0, size * 0.42, size * 0.28, 0, 0, Math.PI * 2)
+  context.fill()
+  context.restore()
+}
+
+const drawPaintStamp = (
+  context: CanvasRenderingContext2D,
+  stroke: Stroke,
+  sample: BrushSample,
+  size: number,
+  alpha: number,
+  seedBase: number
+) => {
+  const tilt = getTiltData(sample.point, sample.angle + Math.PI / 2)
+  const bristleCount = Math.max(3, Math.round(size / 4.5))
+  const spread = size * (0.16 + tilt.magnitude * 0.42)
+
+  context.save()
+  context.translate(sample.point.x, sample.point.y)
+  context.rotate(sample.angle + tilt.angle * 0.04)
+
+  for (let index = 0; index < bristleCount; index += 1) {
+    const mix = bristleCount === 1 ? 0 : index / (bristleCount - 1)
+    const offset = (mix - 0.5) * spread
+    const jitter = (pseudoRandom(seedBase + sample.index * 61 + index * 13) - 0.5) * size * 0.18
+    const width = size * (0.18 + pseudoRandom(seedBase + sample.index * 37 + index * 11) * 0.14)
+    const height = size * (0.42 + pseudoRandom(seedBase + sample.index * 41 + index * 7) * 0.18)
+
+    context.globalAlpha = alpha * (0.28 + pseudoRandom(seedBase + sample.index * 19 + index * 5) * 0.4)
+    context.beginPath()
+    context.ellipse(jitter, offset, width, height, 0, 0, Math.PI * 2)
+    context.fill()
+  }
+
+  context.restore()
+  drawTextureSpeckles(context, stroke, sample, size * 0.9, alpha, seedBase + 91)
+}
+
+const drawGrainStamp = (
+  context: CanvasRenderingContext2D,
+  stroke: Stroke,
+  sample: BrushSample,
+  size: number,
+  alpha: number,
+  seedBase: number
+) => {
+  const density = clamp(stroke.grain, 0, 100) / 100
+  const dustCount = Math.max(6, Math.round(size * 0.4 + density * 14))
+
+  for (let index = 0; index < dustCount; index += 1) {
+    const angle = pseudoRandom(seedBase + sample.index * 89 + index * 13) * Math.PI * 2
+    const distance = pseudoRandom(seedBase + sample.index * 67 + index * 17) * size * 0.62
+    const radius = size * (0.05 + pseudoRandom(seedBase + sample.index * 43 + index * 23) * 0.08)
+
+    context.globalAlpha = alpha * (0.12 + density * 0.3)
+    context.beginPath()
+    context.arc(
+      sample.point.x + Math.cos(angle) * distance,
+      sample.point.y + Math.sin(angle) * distance,
+      radius,
+      0,
+      Math.PI * 2
+    )
+    context.fill()
+  }
+
+  context.globalAlpha = alpha * 0.22
+  context.beginPath()
+  context.arc(sample.point.x, sample.point.y, size * 0.22, 0, Math.PI * 2)
+  context.fill()
+}
+
+const drawStarShape = (
+  context: CanvasRenderingContext2D,
+  points: number,
+  outerRadius: number,
+  innerRadius: number
+) => {
+  context.beginPath()
+
+  for (let index = 0; index < points * 2; index += 1) {
+    const angle = -Math.PI / 2 + (Math.PI * index) / points
+    const radius = index % 2 === 0 ? outerRadius : innerRadius
+    const x = Math.cos(angle) * radius
+    const y = Math.sin(angle) * radius
+
+    if (index === 0) {
+      context.moveTo(x, y)
+    } else {
+      context.lineTo(x, y)
+    }
+  }
+
+  context.closePath()
+  context.fill()
+}
+
+const drawStampShape = (
+  context: CanvasRenderingContext2D,
+  stroke: Stroke,
+  sample: BrushSample,
+  size: number,
+  alpha: number,
+  seedBase: number
+) => {
+  const tilt = getTiltData(sample.point, sample.angle)
+  const randomTwist = (pseudoRandom(seedBase + sample.index * 19) - 0.5) * 0.14
+
+  context.save()
+  context.translate(sample.point.x, sample.point.y)
+  context.rotate(sample.angle + tilt.angle * 0.08 + randomTwist)
+  context.globalAlpha = alpha
+
+  if (stroke.tip === 'stamp-star') {
+    drawStarShape(context, 5, size * 0.54, size * 0.24)
+  } else {
+    context.beginPath()
+    context.rect(-size * 0.4, -size * 0.4, size * 0.8, size * 0.8)
+    context.fill()
+  }
+
+  context.restore()
+}
+
 export const drawStroke = (
   context: CanvasRenderingContext2D,
   stroke: Stroke,
@@ -409,44 +766,38 @@ export const drawStroke = (
     return
   }
 
+  const samples = sampleStroke(stroke)
+  const seedBase = hashString(stroke.id)
+
   context.save()
   context.globalCompositeOperation = stroke.mode === 'erase' ? 'destination-out' : 'source-over'
-  context.globalAlpha = clamp(alpha, 0, 1) * clamp(stroke.opacity, 0, 1)
-  context.strokeStyle = stroke.color
   context.fillStyle = stroke.color
+  context.strokeStyle = stroke.color
   context.lineCap = 'round'
   context.lineJoin = 'round'
 
-  if (stroke.points.length === 1) {
-    context.beginPath()
-    context.arc(stroke.points[0].x, stroke.points[0].y, stroke.size / 2, 0, Math.PI * 2)
-    context.fill()
-    context.restore()
-    return
-  }
+  for (const sample of samples) {
+    const size = getSampleSize(stroke, sample)
+    const sampleAlpha = getSampleAlpha(stroke, sample, alpha)
 
-  const widths = getStrokeWidths(stroke)
-
-  for (let index = 1; index < stroke.points.length; index += 1) {
-    const previous = stroke.points[index - 1]
-    const current = stroke.points[index]
-    const segmentWidth = (widths[index - 1] + widths[index]) / 2
-
-    context.lineWidth = segmentWidth
-    context.beginPath()
-    context.moveTo(previous.x, previous.y)
-    context.lineTo(current.x, current.y)
-    context.stroke()
-
-    if (index === 1) {
-      context.beginPath()
-      context.arc(previous.x, previous.y, widths[0] / 2, 0, Math.PI * 2)
-      context.fill()
+    switch (stroke.tip) {
+      case 'fine':
+        drawFineStamp(context, sample, size, sampleAlpha)
+        break
+      case 'paint':
+        drawPaintStamp(context, stroke, sample, size, sampleAlpha, seedBase)
+        break
+      case 'grain':
+        drawGrainStamp(context, stroke, sample, size, sampleAlpha, seedBase)
+        break
+      case 'stamp-star':
+      case 'stamp-square':
+        drawStampShape(context, stroke, sample, size, sampleAlpha, seedBase)
+        break
+      case 'round':
+      default:
+        drawRoundStamp(context, stroke, sample, size, sampleAlpha, seedBase)
     }
-
-    context.beginPath()
-    context.arc(current.x, current.y, widths[index] / 2, 0, Math.PI * 2)
-    context.fill()
   }
 
   context.restore()
@@ -582,10 +933,10 @@ export const paintEditorScene = (
     0,
     viewportWidth * 0.5,
     viewportHeight * 0.5,
-    Math.max(viewportWidth, viewportHeight) * 0.75
+    Math.max(viewportWidth, viewportHeight) * 0.8
   )
-  backdrop.addColorStop(0, '#16202d')
-  backdrop.addColorStop(1, '#0b1118')
+  backdrop.addColorStop(0, '#162231')
+  backdrop.addColorStop(1, '#091018')
   context.fillStyle = backdrop
   context.fillRect(0, 0, viewportWidth, viewportHeight)
 
@@ -596,7 +947,7 @@ export const paintEditorScene = (
   context.translate(-CANVAS_WIDTH / 2, -CANVAS_HEIGHT / 2)
 
   context.save()
-  context.shadowColor = 'rgba(0, 0, 0, 0.38)'
+  context.shadowColor = 'rgba(0, 0, 0, 0.4)'
   context.shadowBlur = 34 / Math.max(viewport.scale, 0.25)
   context.fillStyle = CANVAS_BACKGROUND
   context.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT)
@@ -622,7 +973,7 @@ export const paintEditorScene = (
 
   context.restore()
 
-  context.strokeStyle = 'rgba(181, 196, 222, 0.56)'
+  context.strokeStyle = 'rgba(214, 224, 240, 0.5)'
   context.lineWidth = 1 / Math.max(viewport.scale, 0.0001)
   context.strokeRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT)
 

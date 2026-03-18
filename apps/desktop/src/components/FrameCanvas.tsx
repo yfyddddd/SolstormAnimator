@@ -51,7 +51,6 @@ type TouchPointerSnapshot = {
 type GestureSnapshot = {
   pointerIds: [number, number]
   viewport: ViewTransform
-  midpoint: Point
   distance: number
   angle: number
   worldMidpoint: Point
@@ -75,6 +74,8 @@ export function FrameCanvas({ isFullscreen, viewResetToken }: FrameCanvasProps) 
   const viewPanRef = useRef<ViewPanSnapshot | null>(null)
   const touchPointersRef = useRef(new Map<number, TouchPointerSnapshot>())
   const gestureRef = useRef<GestureSnapshot | null>(null)
+  const activePenPointersRef = useRef(new Set<number>())
+  const lastPenInputTimeRef = useRef(0)
 
   const [canvasSize, setCanvasSize] = useState<CanvasSize>({
     width: 1,
@@ -92,7 +93,8 @@ export function FrameCanvas({ isFullscreen, viewResetToken }: FrameCanvasProps) 
   const activeLayerId = useProjectStore((state) => state.activeLayerId)
   const selectedStrokeIds = useProjectStore((state) => state.selectedStrokeIds)
   const activeTool = useProjectStore((state) => state.activeTool)
-  const brush = useProjectStore((state) => state.brush)
+  const lastDrawingTool = useProjectStore((state) => state.lastDrawingTool)
+  const toolPresets = useProjectStore((state) => state.toolPresets)
   const onionSkinEnabled = useProjectStore((state) => state.onionSkinEnabled)
   const onionSkinOpacity = useProjectStore((state) => state.onionSkinOpacity)
   const isPlaying = useProjectStore((state) => state.isPlaying)
@@ -104,6 +106,8 @@ export function FrameCanvas({ isFullscreen, viewResetToken }: FrameCanvasProps) 
   const translateSelectedStrokes = useProjectStore((state) => state.translateSelectedStrokes)
   const stopPlayback = useProjectStore((state) => state.stopPlayback)
 
+  const editableTool = activeTool === 'select' ? lastDrawingTool : activeTool
+  const brush = toolPresets[editableTool]
   const currentFrame = frames[currentFrameIndex] ?? frames[0]
   const previousFrame = currentFrameIndex > 0 ? frames[currentFrameIndex - 1] : null
   const activeLayer = getLayerById(currentFrame, activeLayerId)
@@ -124,7 +128,9 @@ export function FrameCanvas({ isFullscreen, viewResetToken }: FrameCanvasProps) 
     [activeStrokeMode, activeTool, brushForStroke, rawPoints]
   )
 
-  const updateViewport = (nextViewport: ViewTransform | ((current: ViewTransform) => ViewTransform)) => {
+  const updateViewport = (
+    nextViewport: ViewTransform | ((current: ViewTransform) => ViewTransform)
+  ) => {
     setViewport((currentViewport) => {
       const resolvedViewport =
         typeof nextViewport === 'function' ? nextViewport(currentViewport) : nextViewport
@@ -160,6 +166,19 @@ export function FrameCanvas({ isFullscreen, viewResetToken }: FrameCanvasProps) 
     gestureRef.current = null
   }
 
+  const notePenActivity = (pointerId: number, active: boolean) => {
+    lastPenInputTimeRef.current = performance.now()
+
+    if (active) {
+      activePenPointersRef.current.add(pointerId)
+    } else {
+      activePenPointersRef.current.delete(pointerId)
+    }
+  }
+
+  const shouldRejectTouchForPalm = () =>
+    activePenPointersRef.current.size > 0 || performance.now() - lastPenInputTimeRef.current < 650
+
   const getScreenPointFromClient = (clientX: number, clientY: number) => {
     const canvas = canvasRef.current
 
@@ -170,13 +189,21 @@ export function FrameCanvas({ isFullscreen, viewResetToken }: FrameCanvasProps) 
     return getRelativePoint(canvas, clientX, clientY)
   }
 
-  const getWorldPointFromClient = (clientX: number, clientY: number) =>
-    screenToWorldPoint(
-      getScreenPointFromClient(clientX, clientY),
+  const createWorldPointFromPointer = (event: CanvasPointerEvent<HTMLCanvasElement>) => {
+    const worldPoint = screenToWorldPoint(
+      getScreenPointFromClient(event.clientX, event.clientY),
       viewportRef.current,
       canvasSize.width,
       canvasSize.height
     )
+
+    return {
+      ...worldPoint,
+      pressure: event.pointerType === 'pen' ? clamp(event.pressure || 0.08, 0.02, 1) : 1,
+      tiltX: event.pointerType === 'pen' ? event.tiltX ?? 0 : 0,
+      tiltY: event.pointerType === 'pen' ? event.tiltY ?? 0 : 0
+    } satisfies Point
+  }
 
   const beginViewPan = (pointerId: number, clientX: number, clientY: number) => {
     viewPanRef.current = {
@@ -202,7 +229,6 @@ export function FrameCanvas({ isFullscreen, viewResetToken }: FrameCanvasProps) 
     gestureRef.current = {
       pointerIds: [firstEntry[0], secondEntry[0]],
       viewport: viewportRef.current,
-      midpoint,
       distance: Math.max(18, distanceBetween(firstPoint, secondPoint)),
       angle: Math.atan2(secondPoint.y - firstPoint.y, secondPoint.x - firstPoint.x),
       worldMidpoint: screenToWorldPoint(
@@ -367,7 +393,7 @@ export function FrameCanvas({ isFullscreen, viewResetToken }: FrameCanvasProps) 
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
 
-    const finalPoint = event ? getWorldPointFromClient(event.clientX, event.clientY) : null
+    const finalPoint = event ? createWorldPointFromPointer(event) : null
     const completedPoints = finalPoint
       ? appendPoint(rawPointsRef.current, finalPoint, 0.1)
       : rawPointsRef.current
@@ -386,9 +412,7 @@ export function FrameCanvas({ isFullscreen, viewResetToken }: FrameCanvasProps) 
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
 
-    const finalPoint = event
-      ? getWorldPointFromClient(event.clientX, event.clientY)
-      : pointerOriginRef.current
+    const finalPoint = event ? createWorldPointFromPointer(event) : pointerOriginRef.current
 
     if (interactionRef.current === 'moving-selection') {
       resetLocalInteraction()
@@ -449,12 +473,16 @@ export function FrameCanvas({ isFullscreen, viewResetToken }: FrameCanvasProps) 
   }
 
   const handlePointerDown = (event: CanvasPointerEvent<HTMLCanvasElement>) => {
+    if (event.pointerType === 'pen') {
+      notePenActivity(event.pointerId, true)
+    }
+
     if (isPlaying) {
       stopPlayback()
     }
 
     if (event.pointerType === 'touch') {
-      if (interactionRef.current !== 'idle') {
+      if (shouldRejectTouchForPalm() || interactionRef.current !== 'idle') {
         return
       }
 
@@ -484,7 +512,11 @@ export function FrameCanvas({ isFullscreen, viewResetToken }: FrameCanvasProps) 
       return
     }
 
-    const point = getWorldPointFromClient(event.clientX, event.clientY)
+    if (event.pointerType === 'pen' && event.button > 0) {
+      return
+    }
+
+    const point = createWorldPointFromPointer(event)
 
     if (activeTool === 'select') {
       interactionRef.current = 'marquee'
@@ -529,6 +561,10 @@ export function FrameCanvas({ isFullscreen, viewResetToken }: FrameCanvasProps) 
   }
 
   const handlePointerMove = (event: CanvasPointerEvent<HTMLCanvasElement>) => {
+    if (event.pointerType === 'pen') {
+      notePenActivity(event.pointerId, true)
+    }
+
     if (event.pointerType === 'touch' && touchPointersRef.current.has(event.pointerId)) {
       touchPointersRef.current.set(event.pointerId, {
         clientX: event.clientX,
@@ -601,7 +637,7 @@ export function FrameCanvas({ isFullscreen, viewResetToken }: FrameCanvasProps) 
       return
     }
 
-    const point = getWorldPointFromClient(event.clientX, event.clientY)
+    const point = createWorldPointFromPointer(event)
 
     if (interactionRef.current === 'drawing') {
       const minimumDistance = Math.max(0.65, brushForStroke.size * 0.08)
@@ -638,6 +674,10 @@ export function FrameCanvas({ isFullscreen, viewResetToken }: FrameCanvasProps) 
   }
 
   const handlePointerUp = (event: CanvasPointerEvent<HTMLCanvasElement>) => {
+    if (event.pointerType === 'pen') {
+      notePenActivity(event.pointerId, false)
+    }
+
     if (event.pointerType === 'touch') {
       touchPointersRef.current.delete(event.pointerId)
 
@@ -670,6 +710,10 @@ export function FrameCanvas({ isFullscreen, viewResetToken }: FrameCanvasProps) 
   }
 
   const handlePointerCancel = (event: CanvasPointerEvent<HTMLCanvasElement>) => {
+    if (event.pointerType === 'pen') {
+      notePenActivity(event.pointerId, false)
+    }
+
     if (event.pointerType === 'touch') {
       touchPointersRef.current.delete(event.pointerId)
 
@@ -794,7 +838,7 @@ export function FrameCanvas({ isFullscreen, viewResetToken }: FrameCanvasProps) 
             </div>
             <div className="canvas-badge">{selectedStrokeIds.length} selected</div>
             <div className="canvas-badge canvas-badge-help">
-              Touch pans. Pinch zooms and rotates. Alt+wheel rotates.
+              Pencil uses pressure and tilt. Touch navigates. Palm touch is ignored while pen is down.
             </div>
           </div>
         </div>

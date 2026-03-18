@@ -1,5 +1,6 @@
+import { getBrushPresetsForTool } from '../lib/brushes'
 import { useProjectStore } from '../state/projectStore'
-import type { Tool } from '../types'
+import type { DrawingTool, Tool } from '../types'
 
 export type LeftPanelTab = 'tools' | 'brush'
 
@@ -52,11 +53,26 @@ function SliderField({
   )
 }
 
+const tipLabels = {
+  round: 'Round',
+  fine: 'Fine Pen',
+  paint: 'Paintbrush',
+  grain: 'Grain',
+  'stamp-star': 'Star Stamp',
+  'stamp-square': 'Square Stamp'
+} as const
+
 export function LeftPanel({ open, activeTab, onToggleTab }: LeftPanelProps) {
   const activeTool = useProjectStore((state) => state.activeTool)
-  const brush = useProjectStore((state) => state.brush)
+  const lastDrawingTool = useProjectStore((state) => state.lastDrawingTool)
+  const toolPresets = useProjectStore((state) => state.toolPresets)
   const setActiveTool = useProjectStore((state) => state.setActiveTool)
   const updateBrush = useProjectStore((state) => state.updateBrush)
+  const applyBrushPreset = useProjectStore((state) => state.applyBrushPreset)
+
+  const editableTool: DrawingTool = activeTool === 'select' ? lastDrawingTool : activeTool
+  const brush = toolPresets[editableTool]
+  const presets = getBrushPresetsForTool(editableTool)
 
   return (
     <div className="panel-anchor panel-anchor-left">
@@ -80,7 +96,7 @@ export function LeftPanel({ open, activeTab, onToggleTab }: LeftPanelProps) {
           onClick={() => onToggleTab('brush')}
         >
           <strong>Brush</strong>
-          <span>Style</span>
+          <span>Look</span>
         </button>
       </div>
 
@@ -95,8 +111,8 @@ export function LeftPanel({ open, activeTab, onToggleTab }: LeftPanelProps) {
             <h2>{activeTab === 'tools' ? 'Tools' : 'Brush Lab'}</h2>
             <p>
               {activeTab === 'tools'
-                ? 'Switch between drawing, erasing, and selecting without covering the canvas.'
-                : 'Dial in your stroke feel here while the stage stays open.'}
+                ? 'Switch tools fast while the canvas stays front and center.'
+                : 'Every drawing tool keeps its own settings now, so brush and eraser stop fighting each other.'}
             </p>
           </div>
 
@@ -147,39 +163,80 @@ export function LeftPanel({ open, activeTab, onToggleTab }: LeftPanelProps) {
 
               <section className="panel-card">
                 <div className="shortcut-row">
-                  <span>Navigation</span>
-                  <strong>Touch, pinch, rotate</strong>
+                  <span>Brush / Eraser / Select</span>
+                  <strong>B, E, V</strong>
                 </div>
                 <div className="shortcut-row">
-                  <span>Brush size</span>
+                  <span>Resize active drawing tool</span>
                   <strong>[ and ]</strong>
                 </div>
                 <div className="shortcut-row">
-                  <span>Playback</span>
-                  <strong>Space</strong>
+                  <span>Touch navigation</span>
+                  <strong>Pan, pinch, rotate</strong>
                 </div>
                 <div className="shortcut-row">
-                  <span>Undo / Redo</span>
-                  <strong>Ctrl/Cmd+Z</strong>
+                  <span>Reset view</span>
+                  <strong>0</strong>
                 </div>
               </section>
             </>
           ) : (
             <>
               <section className="panel-card">
-                <label className="color-field">
-                  <span>Color</span>
-                  <input
-                    type="color"
-                    value={brush.color}
-                    onChange={(event) => updateBrush({ color: event.target.value })}
-                  />
-                </label>
+                <div className="tool-profile-switcher">
+                  <button
+                    className={editableTool === 'brush' ? 'tool-button-active' : ''}
+                    onClick={() => setActiveTool('brush')}
+                  >
+                    Brush Profile
+                  </button>
+                  <button
+                    className={editableTool === 'eraser' ? 'tool-button-active' : ''}
+                    onClick={() => setActiveTool('eraser')}
+                  >
+                    Eraser Profile
+                  </button>
+                </div>
+
+                <div className="info-card">
+                  <span>Editing</span>
+                  <strong>
+                    {editableTool === 'brush' ? 'Brush' : 'Eraser'} / {tipLabels[brush.tip]}
+                  </strong>
+                </div>
+
+                <div className="preset-grid">
+                  {presets.map((preset) => (
+                    <button
+                      key={preset.id}
+                      className={`preset-card ${
+                        brush.presetId === preset.id ? 'preset-card-active' : ''
+                      }`}
+                      onClick={() => applyBrushPreset(preset.id)}
+                    >
+                      <strong>{preset.label}</strong>
+                      <span>{preset.description}</span>
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              <section className="panel-card">
+                {editableTool === 'brush' ? (
+                  <label className="color-field">
+                    <span>Color</span>
+                    <input
+                      type="color"
+                      value={brush.color}
+                      onChange={(event) => updateBrush({ color: event.target.value })}
+                    />
+                  </label>
+                ) : null}
 
                 <SliderField
                   label="Size"
                   min={1}
-                  max={64}
+                  max={96}
                   value={brush.size}
                   displayValue={`${brush.size}px`}
                   onChange={(value) => updateBrush({ size: value })}
@@ -211,6 +268,42 @@ export function LeftPanel({ open, activeTab, onToggleTab }: LeftPanelProps) {
                   displayValue={`${brush.stabilization}%`}
                   onChange={(value) => updateBrush({ stabilization: value })}
                 />
+
+                <SliderField
+                  label="Grain"
+                  min={0}
+                  max={100}
+                  value={brush.grain}
+                  displayValue={`${brush.grain}%`}
+                  onChange={(value) => updateBrush({ grain: value })}
+                />
+
+                <SliderField
+                  label="Stamp spacing"
+                  min={0}
+                  max={100}
+                  value={brush.spacing}
+                  displayValue={`${brush.spacing}%`}
+                  onChange={(value) => updateBrush({ spacing: value })}
+                />
+
+                <SliderField
+                  label="Pressure size"
+                  min={0}
+                  max={100}
+                  value={brush.pressureSize}
+                  displayValue={`${brush.pressureSize}%`}
+                  onChange={(value) => updateBrush({ pressureSize: value })}
+                />
+
+                <SliderField
+                  label="Pressure opacity"
+                  min={0}
+                  max={100}
+                  value={brush.pressureOpacity}
+                  displayValue={`${brush.pressureOpacity}%`}
+                  onChange={(value) => updateBrush({ pressureOpacity: value })}
+                />
               </section>
 
               <section className="panel-card">
@@ -221,8 +314,8 @@ export function LeftPanel({ open, activeTab, onToggleTab }: LeftPanelProps) {
                   </strong>
                 </div>
                 <p className="drawer-note">
-                  Taper makes the ends breathe. Stabilization smooths your line. Opacity lets you
-                  build softly without losing control.
+                  Fine Pen stays clean, Paintbrush reacts more to pressure, Grain Shader gives
+                  texture, and the stamp brushes repeat shapes along the stroke path.
                 </p>
               </section>
             </>

@@ -35,7 +35,10 @@ export const createId = () => {
 
 export const clonePoint = (point: Point): Point => ({
   x: point.x,
-  y: point.y
+  y: point.y,
+  pressure: point.pressure,
+  tiltX: point.tiltX,
+  tiltY: point.tiltY
 })
 
 export const cloneStroke = (stroke: Stroke): Stroke => ({
@@ -46,6 +49,11 @@ export const cloneStroke = (stroke: Stroke): Stroke => ({
   opacity: stroke.opacity,
   taper: stroke.taper,
   stabilization: stroke.stabilization,
+  tip: stroke.tip,
+  grain: stroke.grain,
+  spacing: stroke.spacing,
+  pressureSize: stroke.pressureSize,
+  pressureOpacity: stroke.pressureOpacity,
   mode: stroke.mode
 })
 

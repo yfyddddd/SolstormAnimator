@@ -16,6 +16,7 @@ export default function App() {
   const [rightPanelOpen, setRightPanelOpen] = useState(false)
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>('layers')
   const [timelineOpen, setTimelineOpen] = useState(false)
+  const [toolbarCollapsed, setToolbarCollapsed] = useState(false)
   const workspaceRef = useRef<HTMLDivElement>(null)
 
   const isPlaying = useProjectStore((state) => state.isPlaying)
@@ -80,6 +81,8 @@ export default function App() {
       const state = useProjectStore.getState()
       const modifierPressed = event.ctrlKey || event.metaKey
       const lowercaseKey = event.key.toLowerCase()
+      const editableTool = state.activeTool === 'select' ? state.lastDrawingTool : state.activeTool
+      const currentBrush = state.toolPresets[editableTool]
 
       if (modifierPressed && lowercaseKey === 'z') {
         event.preventDefault()
@@ -122,13 +125,13 @@ export default function App() {
 
       if (lowercaseKey === '[') {
         event.preventDefault()
-        state.updateBrush({ size: Math.max(1, state.brush.size - 1) })
+        state.updateBrush({ size: Math.max(1, currentBrush.size - 1) })
         return
       }
 
       if (lowercaseKey === ']') {
         event.preventDefault()
-        state.updateBrush({ size: Math.min(64, state.brush.size + 1) })
+        state.updateBrush({ size: Math.min(96, currentBrush.size + 1) })
         return
       }
 
@@ -235,6 +238,7 @@ export default function App() {
         <FrameCanvas isFullscreen={isFullscreen} viewResetToken={viewResetToken} />
 
         <Toolbar
+          collapsed={toolbarCollapsed}
           isFullscreen={isFullscreen}
           isLeftPanelOpen={leftPanelOpen}
           isRightPanelOpen={rightPanelOpen}
@@ -244,6 +248,7 @@ export default function App() {
           onToggleLeftPanel={() => toggleLeftPanelTab(leftPanelTab)}
           onToggleRightPanel={() => toggleRightPanelTab(rightPanelTab)}
           onToggleTimeline={() => setTimelineOpen((currentValue) => !currentValue)}
+          onToggleCollapsed={() => setToolbarCollapsed((currentValue) => !currentValue)}
         />
 
         <LeftPanel
@@ -256,7 +261,10 @@ export default function App() {
           activeTab={rightPanelTab}
           onToggleTab={toggleRightPanelTab}
         />
-        <Timeline open={timelineOpen} onToggle={() => setTimelineOpen((currentValue) => !currentValue)} />
+        <Timeline
+          open={timelineOpen}
+          onToggle={() => setTimelineOpen((currentValue) => !currentValue)}
+        />
       </div>
     </div>
   )
